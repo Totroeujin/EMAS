@@ -6,23 +6,38 @@ class DebtGrid(wx.grid.Grid):
     def __init__(self, parent, members):
         super().__init__(parent)
         self.members = members
-        self.data = {}
+        self.debt_matrix = []
+        self.initialize_matrix()
+        # self.debt_matrix = [[0.0 for _ in members] for _ in members]
         
         self.CreateGrid(len(members), len(members))
         self.SetRowLabelSize(150)
         self.SetColLabelSize(150)
         
-        # Initialize grid cells
+        # Initialize grid from debt_matrix
         for idx, member in enumerate(members):
             self.SetRowLabelValue(idx, member)
             self.SetColLabelValue(idx, member)
             for j in range(len(members)):
-                self.SetCellValue(idx, j, "0.00")
+                self.SetCellValue(idx, j, f"{self.debt_matrix[idx][j]:.2f}")
                 self.SetReadOnly(idx, j, True)
-                self.SetCellBackgroundColour(idx, j, wx.Colour(240, 240, 240))  # Grey
+                self.SetCellBackgroundColour(idx, j, wx.Colour(240, 240, 240))
         
         self.Bind(wx.grid.EVT_GRID_LABEL_LEFT_DCLICK, self.on_label_edit)
         self.update_diagonals()
+
+    def initialize_matrix(self):
+        """Create/update the debt matrix to match member count"""
+        n = len(self.members)
+        # Add new row/column for new members
+        while len(self.debt_matrix) < n:
+            self.debt_matrix.append([0.0] * n)
+        # Truncate if members were removed (though your app doesn't support removal)
+        self.debt_matrix = self.debt_matrix[:n]
+        for row in self.debt_matrix:
+            while len(row) < n:
+                row.append(0.0)
+            row[:] = row[:n]
 
     def on_label_edit(self, event):
         row = event.GetRow()
@@ -34,11 +49,11 @@ class DebtGrid(wx.grid.Grid):
                 self.members[row] = new_name
         event.Skip()
 
-    def update_diagonals(self):
+    def update_diagonals(self, changed_members = None):
         n = len(self.members)
         for idx in range(n):
-            total_owed_to_me = sum(float(self.GetCellValue(idx, j)) for j in range(n) if j != idx)
-            total_i_owe = sum(float(self.GetCellValue(i, idx)) for i in range(n) if i != idx)
+            total_owed_to_me = sum(self.debt_matrix[idx][j] for j in range(n) if j != idx)
+            total_i_owe = sum(self.debt_matrix[i][idx] for i in range(n) if i != idx)
             net = total_owed_to_me - total_i_owe
             self.SetCellValue(idx, idx, f"{net:+.2f}")
             self.update_cell_style(idx, idx)
@@ -58,6 +73,12 @@ class DebtGrid(wx.grid.Grid):
         # Non-diagonal cells keep default grey
         
         self.ForceRefresh()
+
+    def update_cell(self, row, col, value):
+        """Update debt_matrix and grid cell."""
+        self.debt_matrix[row][col] = value
+        self.SetCellValue(row, col, f"{value:.2f}")
+        self.update_cell_style(row, col)
 
 class GroupPanel(wx.Panel):
     def __init__(self, parent, group_name):
@@ -108,21 +129,17 @@ class GroupPanel(wx.Panel):
             self.members.append(new_member)
             new_idx = len(self.members) - 1
             
-            # Add new row and column
+            # Update grid and matrix
             self.debt_grid.AppendRows(1)
             self.debt_grid.AppendCols(1)
+            self.debt_grid.initialize_matrix()  # Sync matrix with new size
             
-            # Initialize new row/column cells
+            # Initialize new cells
             for j in range(len(self.members)):
-                # New row initialization
                 self.debt_grid.SetCellValue(new_idx, j, "0.00")
-                self.debt_grid.SetReadOnly(new_idx, j, True)
-                self.debt_grid.SetCellBackgroundColour(new_idx, j, wx.Colour(240, 240, 240))
-                
-                # New column initialization
                 self.debt_grid.SetCellValue(j, new_idx, "0.00")
-                self.debt_grid.SetReadOnly(j, new_idx, True)
-                self.debt_grid.SetCellBackgroundColour(j, new_idx, wx.Colour(240, 240, 240))
+                self.debt_grid.debt_matrix[new_idx][j] = 0.0
+                self.debt_grid.debt_matrix[j][new_idx] = 0.0
             
             # Update labels and comboboxes
             self.debt_grid.SetRowLabelValue(new_idx, new_member)
@@ -147,17 +164,16 @@ class GroupPanel(wx.Panel):
             wx.MessageBox("Invalid amount!", "Error", wx.OK|wx.ICON_ERROR)
             return
         
-        # Update matrix
+        # Update both grid and matrix
         lender_idx = self.members.index(lender)
         borrower_idx = self.members.index(borrower)
         
-        # Update lender -> borrower cell
-        current = float(self.debt_grid.GetCellValue(lender_idx, borrower_idx) or 0.0)
-        new_value = current + amount
-        self.debt_grid.SetCellValue(lender_idx, borrower_idx, f"{new_value:.2f}")
-        self.debt_grid.update_cell_style(lender_idx, borrower_idx)
+        # Update debt_matrix first
+        self.debt_grid.debt_matrix[lender_idx][borrower_idx] += amount
+        # Then update grid cell
+        self.debt_grid.SetCellValue(lender_idx, borrower_idx, 
+                                f"{self.debt_grid.debt_matrix[lender_idx][borrower_idx]:.2f}")
         
-        # Update net balances
         self.debt_grid.update_diagonals()
 
 class MainFrame(wx.Frame):

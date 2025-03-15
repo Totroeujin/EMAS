@@ -210,16 +210,61 @@ class MainFrame(wx.Frame):
         # Menu bar
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
-        file_menu.Append(wx.ID_SAVE, "Save Data")
-        file_menu.Append(wx.ID_ANY, "Add Group")
+
+        self.ID_SAVE_DATA = wx.NewId()
+        self.ID_ADD_GROUP = wx.NewId()
+        self.ID_SHOW_LOCATION = wx.NewId()
+        self.ID_CLEAR_DATA = wx.NewId()
+        
+        file_menu.Append(self.ID_SAVE_DATA, "Save Data")
+        file_menu.Append(self.ID_ADD_GROUP, "Add Group")
+        file_menu.AppendSeparator()
+        file_menu.Append(self.ID_SHOW_LOCATION, "Show Data File Location")
+        file_menu.Append(self.ID_CLEAR_DATA, "Clear All Data")
+
         menubar.Append(file_menu, "File")
         self.SetMenuBar(menubar)
         
         # Event bindings
-        self.Bind(wx.EVT_MENU, self.on_add_group, id=wx.ID_ANY)
-        self.Bind(wx.EVT_MENU, self.on_save, id=wx.ID_SAVE)
+        self.Bind(wx.EVT_MENU, self.on_save, id=self.ID_SAVE_DATA)
+        self.Bind(wx.EVT_MENU, self.on_add_group, id=self.ID_ADD_GROUP)
+        self.Bind(wx.EVT_MENU, self.on_show_location, id=self.ID_SHOW_LOCATION)
+        self.Bind(wx.EVT_MENU, self.on_clear_data, id=self.ID_CLEAR_DATA)
         
         self.Show()
+
+    def on_show_location(self, event):
+        """Reveal data file in system explorer"""
+        import subprocess
+        try:
+            if os.name == 'nt':  # Windows
+                subprocess.Popen(f'explorer /select,"{self.save_path}"')
+            else:  # Mac/Linux
+                subprocess.Popen(['open', '--reveal', str(self.save_path)])
+        except Exception as e:
+            wx.MessageBox(f"Path: {self.save_path}", "Data File Location", wx.OK)
+
+    def on_clear_data(self, event):
+        """Clear all groups and reset to default"""
+        confirm = wx.MessageBox("This will delete ALL data! Continue?", 
+                              "Warning", wx.YES_NO | wx.ICON_WARNING)
+        if confirm == wx.YES:
+            try:
+                # Delete data file
+                if self.save_path.exists():
+                    self.save_path.unlink()
+                
+                # Clear current notebook
+                self.notebook.DeleteAllPages()
+                
+                # Create fresh default group
+                self.add_group("Default Group")
+                
+                wx.MessageBox("All data has been cleared!", "Success", 
+                            wx.OK | wx.ICON_INFORMATION)
+            except Exception as e:
+                wx.MessageBox(f"Error clearing data: {str(e)}", "Error", 
+                            wx.OK | wx.ICON_ERROR)
 
     def load_data(self):
         """Load data from JSON file on startup"""

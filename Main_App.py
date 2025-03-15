@@ -1,5 +1,17 @@
 import wx
 import wx.grid
+import json
+import os
+from pathlib import Path
+
+class EMAS_App(wx.App):
+    def OnInit(self):
+        self.config_path = Path(os.path.expanduser("~/.EMAS"))
+        self.config_path.mkdir(exist_ok=True)
+        self.save_path = self.config_path / "data.json"
+        self.frame = MainFrame(self.save_path)
+        self.frame.Show()
+        return True
 
 class DebtGrid(wx.grid.Grid):
     """Custom grid for debt matrix with net flow on diagonals."""
@@ -8,20 +20,17 @@ class DebtGrid(wx.grid.Grid):
         self.members = members
         self.debt_matrix = []
         self.initialize_matrix()
-        # self.debt_matrix = [[0.0 for _ in members] for _ in members]
         
-        self.CreateGrid(len(members), len(members))
-        self.SetRowLabelSize(150)
-        self.SetColLabelSize(150)
+        # Create grid ONCE with final size
+        self.CreateGrid(len(self.members), len(self.members))
         
-        # Initialize grid from debt_matrix
-        for idx, member in enumerate(members):
+        # Initialize grid content
+        for idx, member in enumerate(self.members):
             self.SetRowLabelValue(idx, member)
             self.SetColLabelValue(idx, member)
-            for j in range(len(members)):
+            for j in range(len(self.members)):
                 self.SetCellValue(idx, j, f"{self.debt_matrix[idx][j]:.2f}")
                 self.SetReadOnly(idx, j, True)
-                self.SetCellBackgroundColour(idx, j, wx.Colour(240, 240, 240))
         
         self.Bind(wx.grid.EVT_GRID_LABEL_LEFT_DCLICK, self.on_label_edit)
         self.update_diagonals()
@@ -80,11 +89,19 @@ class DebtGrid(wx.grid.Grid):
         self.SetCellValue(row, col, f"{value:.2f}")
         self.update_cell_style(row, col)
 
+    def refresh_all(self):
+        """Refresh grid data and styles"""
+        for i in range(len(self.members)):
+            for j in range(len(self.members)):
+                self.SetCellValue(i, j, f"{self.debt_matrix[i][j]:.2f}")
+        self.update_diagonals()
+
 class GroupPanel(wx.Panel):
-    def __init__(self, parent, group_name):
+    def __init__(self, parent, group_name, main_frame, members=None):
         super().__init__(parent)
+        self.main_frame = main_frame
         self.group_name = group_name
-        self.members = ["You"]
+        self.members = members if members else ["You"]
         self.debt_grid = DebtGrid(self, self.members)
         
         # Input widgets
@@ -124,29 +141,32 @@ class GroupPanel(wx.Panel):
         self.add_transaction.Bind(wx.EVT_BUTTON, self.on_add_transaction)
 
     def on_add_member(self, event):
-        new_member = wx.GetTextFromUser("Enter member name:")
+        new_member = wx.GetTextFromUser("Enter member name:", parent=self)
         if new_member and new_member not in self.members:
+            # Update members list first
             self.members.append(new_member)
             new_idx = len(self.members) - 1
             
-            # Update grid and matrix
+            # Resize grid BEFORE matrix initialization
             self.debt_grid.AppendRows(1)
             self.debt_grid.AppendCols(1)
-            self.debt_grid.initialize_matrix()  # Sync matrix with new size
+            
+            # Reinitialize matrix with new size
+            self.debt_grid.initialize_matrix()
             
             # Initialize new cells
             for j in range(len(self.members)):
                 self.debt_grid.SetCellValue(new_idx, j, "0.00")
                 self.debt_grid.SetCellValue(j, new_idx, "0.00")
-                self.debt_grid.debt_matrix[new_idx][j] = 0.0
-                self.debt_grid.debt_matrix[j][new_idx] = 0.0
             
             # Update labels and comboboxes
             self.debt_grid.SetRowLabelValue(new_idx, new_member)
             self.debt_grid.SetColLabelValue(new_idx, new_member)
             self.lender.Append(new_member)
             self.borrower.Append(new_member)
+            
             self.debt_grid.update_diagonals()
+            self.main_frame.save_data()
 
     def on_add_transaction(self, event):
         lender = self.lender.GetValue()
@@ -175,37 +195,104 @@ class GroupPanel(wx.Panel):
                                 f"{self.debt_grid.debt_matrix[lender_idx][borrower_idx]:.2f}")
         
         self.debt_grid.update_diagonals()
+        self.debt_grid.ForceRefresh()
+        self.main_frame.save_data()
 
 class MainFrame(wx.Frame):
-    def __init__(self):
-        super().__init__(None, title="Financial Manager", size=(800, 600))
+    def __init__(self, save_path):
+        super().__init__(None, title="EMAS", size=(800, 600))
+        self.save_path = save_path
         self.notebook = wx.Notebook(self)
-        self.add_group("Default Group")
+
+        # Load data on startup
+        self.load_data()
         
         # Menu bar
         menubar = wx.MenuBar()
         file_menu = wx.Menu()
-        
-        # Create menu item and bind separately
-        self.add_group_item = file_menu.Append(wx.ID_ANY, "Add Group")
+        file_menu.Append(wx.ID_SAVE, "Save Data")
+        file_menu.Append(wx.ID_ANY, "Add Group")
         menubar.Append(file_menu, "File")
         self.SetMenuBar(menubar)
         
-        # Bind using the menu item's ID
-        self.Bind(wx.EVT_MENU, self.on_add_group, id=self.add_group_item.GetId())
+        # Event bindings
+        self.Bind(wx.EVT_MENU, self.on_add_group, id=wx.ID_ANY)
+        self.Bind(wx.EVT_MENU, self.on_save, id=wx.ID_SAVE)
         
         self.Show()
 
+    def load_data(self):
+        """Load data from JSON file on startup"""
+        if self.save_path.exists():
+            try:
+                with open(self.save_path, 'r') as f:
+                    data = json.load(f)
+                
+                for group_data in data["groups"]:
+                    # Create panel with loaded data
+                    panel = GroupPanel(
+                        self.notebook,
+                        group_data["name"],
+                        self,
+                        members=group_data["members"]
+                    )
+                    
+                    # Set debt matrix
+                    panel.debt_grid.debt_matrix = [
+                        [float(val) for val in row] 
+                        for row in group_data["debt_matrix"]
+                    ]
+                    
+                    # Refresh grid display
+                    panel.debt_grid.refresh_all()  # Add this line
+                    
+                    # Update comboboxes
+                    panel.lender.SetItems(panel.members)
+                    panel.borrower.SetItems(panel.members)
+                    
+                    self.notebook.AddPage(panel, group_data["name"])
+            except Exception as e:
+                wx.MessageBox(f"Error loading data: {str(e)}", "Error", wx.OK | wx.ICON_ERROR)
+                self.add_group("Default Group")
+        else:
+            self.add_group("Default Group")
+
+    def save_data(self):
+        """Save all groups to JSON file"""
+        data = {
+            "groups": [
+                {
+                    "name": self.notebook.GetPageText(i),
+                    "members": self.notebook.GetPage(i).members,
+                    "debt_matrix": [
+                        [float(cell) for cell in row]
+                        for row in self.notebook.GetPage(i).debt_grid.debt_matrix
+                    ]
+                }
+                for i in range(self.notebook.GetPageCount())  # Correct method
+            ]
+        }   
+        
+        with open(self.save_path, 'w') as f:
+            json.dump(data, f, indent=2)
+
     def add_group(self, name):
-        panel = GroupPanel(self.notebook, name)
+        panel = GroupPanel(self.notebook, name, self)
         self.notebook.AddPage(panel, name)
+        self.save_data()
 
     def on_add_group(self, event):
-        name = wx.GetTextFromUser("Group name:")
-        if name: 
-            self.add_group(name)
+        dlg = wx.TextEntryDialog(self, "Enter group name:", "New Group")
+        if dlg.ShowModal() == wx.ID_OK:
+            name = dlg.GetValue()
+            if name: 
+                self.add_group(name)
+        dlg.Destroy()
+
+    def on_save(self, event):
+        self.save_data()
+        wx.MessageBox("Data saved successfully!", "Info", wx.OK | wx.ICON_INFORMATION)
 
 if __name__ == "__main__":
-    app = wx.App()
-    MainFrame()
-    app.MainLoop()
+    app = EMAS_App()  
+    app.MainLoop()    

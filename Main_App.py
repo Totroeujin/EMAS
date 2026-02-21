@@ -198,6 +198,8 @@ class GroupPanel(wx.Panel):
         self.debt_grid.ForceRefresh()
         self.main_frame.save_data()
 
+        self.amount.SetValue("")
+
 class MainFrame(wx.Frame):
     def __init__(self, save_path):
         super().__init__(None, title="EMAS", size=(800, 600))
